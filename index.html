@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-radius="soft" data-buttons="solid" data-motion>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>求真眼 · AI 回答可信度检测</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23f7f8f6'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%2314161a' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='%231f5fbf'/%3E%3C/svg%3E">
+<meta name="description" content="求真眼对 AI 生成的回答做本地事实核查，返回可信、存疑、不可信三级结果，并给出命中的规则编号与依据。数千条规则，毫秒级响应，可完全离线运行。">
+<style>
+/* 字体：只引用本机已装字体（不联网、不跨域）。装了 Noto Serif/Sans SC 就用它，
+   没装则回落到 Windows 自带的宋体/微软雅黑，版式不变。 */
+@font-face {
+  font-family: "Source Serif 4";
+  src: local("Noto Serif SC"), local("NotoSerifSC-VF"), local("Source Han Serif SC");
+  font-weight: 400 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Noto Sans SC";
+  src: local("Noto Sans SC"), local("NotoSansSC-VF"), local("Source Han Sans SC");
+  font-weight: 300 700; font-style: normal; font-display: swap;
+}
+</style>
+<script>document.documentElement.classList.add('m-enter');setTimeout(function(){document.documentElement.classList.add('m-enter-done')},700)</script>
+<style>
+/* 求真眼 · 页面样式：一套系统（中性色 + 光源蓝一个强调色；衬线标题 + 黑体正文；12 列等边距） */
+
+:root {
+  --ink: #14161a;
+  --ink-2: #3b4048;
+  --muted: #6a7280;
+  --line: rgba(20, 22, 26, .13);
+  --line-soft: rgba(20, 22, 26, .08);
+  --g-main: #f7f8f6;
+  --g-alt: #eef0ec;
+  --surface: #ffffff;
+  --action: #1f5fbf;
+  --action-ink: #17489a;
+  --ok: #1f6b43;      --ok-bg: #eaf3ec;
+  --bad: #a5352a;     --bad-bg: #fbeeec;
+  --doubt: #8a6212;   --doubt-bg: #fbf3e2;
+
+  --r-lg: 14px; --r-md: 10px; --r-sm: 8px; --r-btn: 8px;
+  --nav: 68px; --padt: 96px; --padb: 56px; --gut: 80px;
+
+  --t-h1: clamp(36px, 3vw + 16px, 62px);
+  --t-h2: clamp(26px, 1.1vw + 20px, 38px);
+  --t-h3: 20px;
+  --t-lead: 18px; --t-body: 16px; --t-small: 14px; --t-label: 13px; --t-stat: 34px;
+
+  --font-display: "Source Serif 4", "Noto Serif SC", "Songti SC", "SimSun", serif;
+  --font-text: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+
+  --ease: cubic-bezier(.2, .8, .2, 1);
+  --ease-enter: cubic-bezier(.22, 1, .36, 1);
+  --m-in: 150ms; --m-out: 120ms; --m-press: 90ms; --m-slide: 240ms;
+}
+
+@media (max-width: 1023px) { :root { --gut: 40px; --padt: 80px; --padb: 48px; } }
+@media (max-width: 639px) {
+  :root {
+    --nav: 56px; --padt: 64px; --padb: 32px; --gut: 24px;
+    --t-lead: 17px; --t-stat: 28px;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { margin: 0; scroll-behavior: auto; scroll-padding-top: 0; -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--g-main); color: var(--ink);
+  font-family: var(--font-text); font-size: var(--t-body); line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { margin: 0; font-family: var(--font-display); text-wrap: balance; }
+p { margin: 0; }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; }
+code, pre { font-family: "SFMono-Regular", "Cascadia Mono", Consolas, monospace; }
+::selection { background: rgba(31, 95, 191, .16); }
+
+.wrap { width: min(100% - 2 * var(--gut), 1180px); margin: 0 auto; }
+
+.skip-link {
+  position: absolute; top: 8px; left: 8px; z-index: 40; transform: translateY(-160%);
+  background: var(--ink); color: #fff; padding: 8px 14px; border-radius: var(--r-sm); font-size: var(--t-small);
+}
+.skip-link:focus { transform: none; }
+:focus-visible { outline: 2px solid var(--action); outline-offset: 2px; }
+
+/* ---------- 标记与按钮 ---------- */
+.mark { position: relative; display: inline-block; width: 22px; height: 22px; flex: 0 0 auto; }
+.mark i { position: absolute; inset: 2px; border: 1.6px solid currentColor; border-radius: 50%; }
+.mark i::after { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: var(--action); }
+
+.btn {
+  --btn-h: 44px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: var(--btn-h); padding: 0 24px; border-radius: var(--r-btn);
+  border: 1px solid transparent; font-size: var(--t-body); font-weight: 500;
+  cursor: pointer; white-space: nowrap;
+  transition: background-color var(--m-in) var(--ease), border-color var(--m-in) var(--ease),
+              color var(--m-in) var(--ease), transform var(--m-press) var(--ease);
+}
+.btn--primary { background: var(--action); color: #fff; }
+.btn--secondary { background: transparent; color: var(--ink); border-color: var(--line); }
+.btn--xl { --btn-h: 52px; font-size: 17px; padding: 0 32px; }
+.btn-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover { transform: translateY(-1px); }
+  .btn--primary:hover { background: var(--action-ink); }
+  .btn--secondary:hover { background: rgba(20, 22, 26, .045); border-color: rgba(20, 22, 26, .28); }
+}
+.btn:active { transform: translateY(1px) scale(.985); }
+
+/* ---------- 导航 ---------- */
+.nav {
+  position: fixed; inset: 0 0 auto 0; z-index: 20; height: var(--nav);
+  background: var(--g-main); border-bottom: 1px solid var(--line);
+}
+.nav__in { height: 100%; display: flex; align-items: center; gap: 32px; }
+.brand { display: inline-flex; align-items: center; gap: 12px; }
+.brand__name { font-size: 19px; font-weight: 500; letter-spacing: .02em; }
+.nav__links { display: flex; gap: 24px; margin-left: auto; }
+.nav__links a { position: relative; font-size: 15px; color: var(--ink-2); padding: 6px 0; transition: color var(--m-in) var(--ease); }
+.nav__links a::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
+  background: var(--ink); transform: scaleX(0); transform-origin: left;
+  transition: transform var(--m-in) var(--ease);
+}
+@media (hover: hover) and (pointer: fine) {
+  .nav__links a:hover { color: var(--ink); }
+  .nav__links a:hover::after { transform: scaleX(1); }
+}
+.nav__cta { --btn-h: 40px; padding: 0 16px; font-size: 15px; }
+.nav__progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; }
+.nav__progress i { display: block; height: 100%; width: 0; background: var(--action); opacity: .5; }
+
+@media (max-width: 899px) { .nav__links { display: none; } .nav__cta { margin-left: auto; } }
+@media (max-width: 479px) { .nav__cta { --btn-h: 36px; font-size: 14px; padding: 0 12px; } }
+
+/* ---------- 首屏 ---------- */
+.hero { min-height: 100svh; display: flex; align-items: center; padding: calc(var(--nav) + 20px) 0 24px; }
+.hero__grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 20px 32px; align-items: start; }
+.hero__text { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) 236px; gap: 24px 56px; align-items: end; }
+.hero__bench { grid-column: 1 / -1; }
+.hero__art { display: none; }
+.hero__art > .panel { margin-top: 12px; }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px 0 10px;
+  margin-bottom: 20px; border: 1px solid var(--line); border-radius: 999px;
+  font-size: var(--t-small); color: var(--ink-2); background: var(--surface);
+}
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+
+.br { display: inline; }
+.hero h1 { font-size: var(--t-h1); font-weight: 500; line-height: 1.12; letter-spacing: -.02em; }
+.hero__main { max-width: 34em; }
+.hero__lead { margin: 12px 0 0; max-width: 24em; font-size: var(--t-lead); line-height: 1.72; color: var(--ink-2); }
+.hero__facts { display: flex; gap: 16px; margin: 0; padding: 4px 0 4px 24px; border-left: 1px solid var(--line); }
+.hero__facts dd { margin: 0; }
+.hero__facts .f__v { display: block; font-family: var(--font-display); font-size: 24px; line-height: 1.1; letter-spacing: -.01em; }
+.hero__facts .f__k { font-size: var(--t-label); color: var(--muted); order: 2; }
+.hero__facts { flex-direction: column; gap: 16px; align-self: end; margin: 0 0 4px; }
+.hero__facts > div { display: flex; flex-direction: row; align-items: baseline; gap: 10px; }
+.hero__facts .f__k { order: 2; }
+
+.panel {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+  box-shadow: 0 1px 2px rgba(20, 22, 26, .04), 0 18px 44px -28px rgba(20, 22, 26, .30); overflow: hidden;
+}
+.panel__bar {
+  display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 16px;
+  border-bottom: 1px solid var(--line-soft); background: #fbfbfa;
+}
+.panel__dots { display: inline-flex; gap: 5px; }
+.panel__dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
+.panel__path { font-size: 12.5px; color: var(--muted); }
+.panel__chip { margin-left: auto; font-size: 11.5px; letter-spacing: .06em; color: var(--action); background: rgba(31, 95, 191, .08); border-radius: 5px; padding: 2px 7px; }
+.panel__body { padding: 18px; display: grid; gap: 10px; }
+.panel__row { display: grid; grid-template-columns: 66px 1fr; gap: 10px; align-items: baseline; }
+.panel__k { font-size: 12px; color: var(--muted); }
+.panel__q { font-size: 15px; color: var(--ink); }
+.panel__verdict { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: var(--r-md); border-left: 3px solid transparent; }
+.panel__verdict.is-ok { background: var(--ok-bg); border-left-color: var(--ok); }
+.panel__verdict.is-bad { background: var(--bad-bg); border-left-color: var(--bad); }
+.verdict__tag { font-size: 14px; font-weight: 500; flex: 0 0 auto; }
+.is-ok .verdict__tag { color: var(--ok); }
+.is-bad .verdict__tag { color: var(--bad); }
+.verdict__meta { font-size: 13px; color: var(--ink-2); }
+.panel__foot { display: flex; gap: 8px; align-items: baseline; padding-top: 10px; border-top: 1px solid var(--line-soft); font-size: 12.5px; color: var(--muted); }
+.panel__foot span:nth-child(2) { margin-right: 18px; color: var(--ink-2); }
+@media (max-width: 639px) { .panel__foot { display: none; } }
+
+.panel-ledger {
+  display: none; position: absolute; right: -20px; top: calc(100% + 12px); width: 200px; padding: 12px 14px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+  box-shadow: 0 1px 2px rgba(20, 22, 26, .04), 0 14px 30px -20px rgba(20, 22, 26, .35);
+}
+.ledger__t { font-size: 12px; color: var(--muted); }
+.ledger__grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 6px; }
+.ledger__grid span { font-family: var(--font-display); font-size: 19px; line-height: 1.15; }
+.ledger__grid em { display: block; font-style: normal; font-size: 11.5px; color: var(--muted); }
+
+@media (max-width: 1023px) {
+  .hero { padding: calc(var(--nav) + 24px) 0 48px; }
+  .hero__text, .hero__bench { grid-column: 1 / -1; }
+  .hero__art { margin-top: 40px; padding-bottom: 64px; }
+  .panel-ledger { left: auto; right: 0; top: calc(100% - 40px); bottom: auto; }
+}
+@media (max-width: 639px) {
+  .hero { padding-bottom: 24px; padding-top: calc(var(--nav) + 20px); }
+  .hero__text { grid-template-columns: 1fr; }
+  .hero__facts { border-left: 0; padding-left: 0; }
+  .hero__facts { flex-direction: row; flex-wrap: wrap; gap: 14px 20px; padding: 14px 0 0; border-top: 1px solid var(--line); }
+  .panel-ledger { display: none; }
+  .hero__facts { gap: 18px; margin-top: 24px; }
+  .hero__art { padding-bottom: 0; margin-top: 28px; }
+  .panel-ledger { position: static; width: 100%; margin-top: 8px; display: flex; align-items: center; gap: 16px; padding: 10px 14px; }
+  .ledger__grid { margin-top: 0; flex: 1; }
+  .ledger__t { flex: 0 0 auto; }
+  .panel__row { grid-template-columns: 1fr; gap: 0; }
+  .panel__verdict { flex-direction: column; align-items: flex-start; gap: 0; }
+}
+
+/* ---------- 区块 ---------- */
+.sec {
+  min-height: calc(var(--h, 1) * 100svh);
+  display: flex; flex-direction: column;
+  padding: var(--padt) 0 var(--padb);
+}
+.sec--g2 { --h: 2; }
+.sec--alt { background: var(--g-alt); }
+.sec > .wrap.sec__fill { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+
+h2 { font-size: var(--t-h2); font-weight: 500; line-height: 1.26; letter-spacing: -.012em; max-width: 36em; }
+h2 .muted { display: block; margin-top: 8px; font-family: var(--font-text); font-size: 15px; font-weight: 400; line-height: 1.6; letter-spacing: 0; color: var(--muted); }
+.sec__head { margin-bottom: 32px; }
+
+/* ---------- 检测台（首屏） ---------- */
+.hero__bench .app { grid-template-columns: 1fr; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: 0 1px 2px rgba(20,22,26,.05), 0 20px 50px -34px rgba(20,22,26,.32); overflow: hidden; }
+.hero__bench .app__main { padding: 0 0 20px; }
+.hero__bench .app__head { margin: 0; padding: 0 24px; border-bottom: 1px solid var(--line-soft); }
+.hero__bench .tabs { display: flex; align-items: center; gap: 22px; }
+.hero__bench .tab { padding: 14px 0 12px; }
+.app__status { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+.hero__bench .offline { margin: 16px 24px 0; }
+.hero__bench .form { padding: 18px 24px 0; gap: 10px; }
+.hero__bench .pane .verdict, .hero__bench .stats, .hero__bench .batch { margin-left: 24px; margin-right: 24px; }
+.hero__bench .verdict { margin-top: 10px; }
+.hero__bench .v-card { padding: 10px 16px; }
+.hero__bench .v-card__msg { font-size: 14px; }
+.form__row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
+.field--act .btn { --btn-h: 42px; }
+.hero__bench .field input, .hero__bench .field textarea { padding: 9px 12px; background: #fbfbfa; }
+.hero__bench .form { gap: 10px; }
+.hero__bench .field textarea { min-height: 72px; }
+.hero__bench .form__foot { padding-top: 2px; }
+@media (max-width: 1199px) and (min-width: 900px) {
+  .hero__text { grid-template-columns: minmax(0, 1fr) 190px; gap: 20px 32px; }
+  .hero h1 { font-size: clamp(34px, 3.4vw, 44px); }
+  .hero__lead { font-size: 16px; max-width: 26em; }
+  .hero__facts .f__v { font-size: 21px; }
+}
+@media (max-width: 639px) {
+  .hero__bench .tabs { gap: 16px; flex-wrap: nowrap; }
+  .hero__bench .tab { white-space: nowrap; font-size: 14px; }
+  .app__status { display: none; }
+  .hero__bench .form__foot { display: none; }
+  .hero__bench .field textarea { min-height: 72px; }
+  .form__row { grid-template-columns: 1fr; }
+  .hero__bench .pane .verdict, .hero__bench .stats, .hero__bench .batch { margin-left: 16px; margin-right: 16px; }
+  .hero__bench .form { padding: 16px 16px 0; }
+  .hero__bench .app__head { padding: 0 16px; }
+  .form__foot .btn { width: 100%; }
+}
+
+/* ---------- 检测台 ---------- */
+.offline {
+  margin-bottom: 20px; padding: 11px 16px; border: 1px solid rgba(138, 98, 18, .26);
+  border-left: 3px solid var(--doubt); background: var(--doubt-bg); color: var(--ink-2);
+  border-radius: var(--r-sm); font-size: var(--t-small);
+}
+.offline[hidden] { display: none !important; }
+.offline code { background: rgba(20, 22, 26, .06); padding: 1px 5px; border-radius: 4px; }
+
+.app {
+  display: grid; grid-template-columns: 220px 1fr; background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden;
+  box-shadow: 0 1px 2px rgba(20, 22, 26, .04);
+}
+.app__side { padding: 20px; border-right: 1px solid var(--line-soft); background: #fbfbfa; }
+.app__label { font-size: 12px; color: var(--muted); }
+.app__count { margin-top: 2px; font-size: 15px; color: var(--ink-2); }
+.app__count b { font-family: var(--font-display); font-size: 26px; color: var(--ink); margin-right: 4px; }
+.app__meta { margin: 20px 0 0; display: grid; gap: 10px; }
+.app__meta div { display: grid; gap: 1px; }
+.app__meta dt { font-size: 12px; color: var(--muted); }
+.app__meta dd { margin: 0; font-size: var(--t-small); color: var(--ink-2); }
+
+.app__main { padding: 16px 28px 24px; min-width: 0; }
+.app__head { border-bottom: 1px solid var(--line-soft); margin-bottom: 20px; }
+
+.tabs { position: relative; display: flex; gap: 24px; }
+.tab { background: none; border: 0; padding: 0 0 11px; cursor: pointer; font-size: 15px; color: var(--muted); transition: color 120ms var(--ease); }
+.tab[aria-selected="true"] { color: var(--ink); font-weight: 500; }
+.tab__ind {
+  position: absolute; left: 0; bottom: -1px; height: 2px; width: 0; background: var(--ink);
+  transform-origin: left; transition: transform var(--m-slide) var(--ease), width var(--m-slide) var(--ease);
+}
+
+[hidden] { display: none !important; }
+.form { display: grid; gap: 14px; }
+.field { display: grid; gap: 5px; }
+.field label { font-size: var(--t-small); font-weight: 500; color: var(--ink-2); }
+.field input, .field textarea {
+  width: 100%; padding: 10px 13px; font: inherit; font-size: 15px; color: var(--ink);
+  background: var(--g-main); border: 1px solid var(--line); border-radius: var(--r-sm); resize: vertical;
+  transition: border-color 140ms var(--ease), background-color 140ms var(--ease), box-shadow 140ms var(--ease);
+}
+.field input::placeholder, .field textarea::placeholder { color: #9aa1ab; }
+.field input:focus, .field textarea:focus {
+  outline: none; background: var(--surface); border-color: var(--action);
+  box-shadow: 0 0 0 3px rgba(31, 95, 191, .14);
+}
+.form__foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.form__hint { font-size: var(--t-small); color: var(--muted); }
+.chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chips__h { font-size: 12px; color: var(--muted); }
+.chip {
+  border: 1px solid var(--line); background: transparent; border-radius: 999px;
+  padding: 4px 11px; font-size: 13px; color: var(--ink-2); cursor: pointer;
+  transition: border-color var(--m-in) var(--ease), background-color var(--m-in) var(--ease), color var(--m-in) var(--ease);
+}
+@media (hover: hover) and (pointer: fine) {
+  .chip:hover { border-color: rgba(20, 22, 26, .3); background: rgba(20, 22, 26, .04); color: var(--ink); }
+}
+
+.verdict { margin-top: 14px; }
+.verdict:empty { display: none !important; }
+.v-card {
+  border-radius: var(--r-md); padding: 14px 18px; border: 1px solid var(--line-soft);
+  border-left: 3px solid transparent; display: grid; gap: 2px;
+}
+.v-card { animation: v-in 320ms var(--ease-enter) both; }
+@keyframes v-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.v-card.ok { background: var(--ok-bg); border-left-color: var(--ok); }
+.v-card.bad { background: var(--bad-bg); border-left-color: var(--bad); }
+.v-card.doubt { background: var(--doubt-bg); border-left-color: var(--doubt); }
+.v-card__top { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.v-card__level { font-size: 18px; font-weight: 500; }
+.ok .v-card__level { color: var(--ok); }
+.bad .v-card__level { color: var(--bad); }
+.doubt .v-card__level { color: var(--doubt); }
+.v-card__why { font-size: 13px; color: var(--ink-2); }
+.v-card__msg { font-size: 15px; color: var(--ink-2); line-height: 1.6; }
+
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 16px; }
+.stats:empty { display: none !important; }
+.stat { background: var(--g-main); border: 1px solid var(--line-soft); border-radius: var(--r-sm); padding: 8px 14px; }
+.stat b { display: block; font-family: var(--font-display); font-size: 24px; line-height: 1.25; }
+.stat span { font-size: 12px; color: var(--muted); }
+
+.batch { margin-top: 10px; display: grid; gap: 6px; max-height: 220px; overflow: auto; }
+.batch:empty { display: none !important; }
+.batch__row {
+  display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: baseline;
+  padding: 8px 12px; border-radius: var(--r-sm); font-size: 14px; background: var(--g-main);
+}
+.batch__row .b-q { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch__row .b-l { font-weight: 500; white-space: nowrap; }
+.batch__row.ok .b-l { color: var(--ok); }
+.batch__row.bad .b-l { color: var(--bad); }
+.batch__row.doubt .b-l { color: var(--doubt); }
+.batch__row .b-why { grid-column: 1 / -1; font-size: 12.5px; color: var(--muted); }
+
+@media (max-width: 899px) {
+  .app { grid-template-columns: 1fr; }
+  .app__side { border-right: 0; border-bottom: 1px solid var(--line-soft); display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 2px 16px; }
+  .app__meta { grid-column: 1 / -1; grid-template-columns: repeat(3, 1fr); display: grid; gap: 8px 16px; margin-top: 8px; }
+  .app__main { padding: 16px 20px 20px; }
+}
+@media (max-width: 639px) {
+  .app__meta { grid-template-columns: 1fr 1fr; }
+  .form__foot { align-items: stretch; }
+  .form__foot .btn { width: 100%; }
+  .stats { grid-template-columns: 1fr 1fr; }
+}
+
+/* ---------- 怎么判 ---------- */
+.example { margin-top: 28px; padding: 18px 22px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); display: grid; gap: 6px; }
+.example__label { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.example__row { display: grid; grid-template-columns: 44px 1fr; gap: 12px; font-size: 15px; color: var(--ink-2); }
+.example__k { font-size: 12px; color: var(--muted); line-height: 1.9; }
+.example__verdict { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
+.example__verdict .verdict__tag { color: var(--bad); }
+.chain { position: relative; height: 1px; background: var(--line); margin-bottom: 24px; }
+.chain span {
+  position: absolute; top: 0; left: 0; height: 1px; width: 0; background: var(--action); opacity: .55;
+  animation: chain-run 3.2s linear infinite;
+}
+@keyframes chain-run { 0% { width: 0; left: 0; } 60% { width: 100%; left: 0; } 61% { width: 0; left: 100%; } 100% { width: 0; left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .chain span { animation: none; width: 100%; } }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; }
+.step { padding-top: 14px; border-top: 1px solid var(--line); }
+.step__n { font-family: var(--font-display); font-size: 13px; color: var(--muted); letter-spacing: .08em; }
+.step h3 { margin-top: 8px; font-size: var(--t-h3); font-weight: 500; }
+.step p { margin-top: 6px; font-size: 15px; line-height: 1.72; color: var(--ink-2); }
+.legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 44px; }
+.lg { padding: 14px 18px; border-radius: var(--r-md); border: 1px solid var(--line-soft); border-left: 3px solid transparent; }
+.lg.is-ok { background: var(--ok-bg); border-left-color: var(--ok); }
+.lg.is-bad { background: var(--bad-bg); border-left-color: var(--bad); }
+.lg.is-doubt { background: var(--doubt-bg); border-left-color: var(--doubt); }
+.lg__tag { font-size: 14px; font-weight: 500; }
+.lg.is-ok .lg__tag { color: var(--ok); }
+.lg.is-bad .lg__tag { color: var(--bad); }
+.lg.is-doubt .lg__tag { color: var(--doubt); }
+.lg p { margin-top: 2px; font-size: var(--t-small); color: var(--ink-2); line-height: 1.6; }
+
+@media (max-width: 899px) {
+  .steps { grid-template-columns: 1fr; gap: 18px; }
+  .legend { grid-template-columns: 1fr; gap: 10px; margin-top: 28px; }
+}
+
+/* ---------- 接口 ---------- */
+.split { display: grid; grid-template-columns: repeat(12, 1fr); gap: 24px; }
+.split__text { grid-column: 1 / span 6; }
+.split__side { grid-column: 8 / span 5; }
+.split__note { margin-top: 14px; font-size: var(--t-small); color: var(--ink-2); max-width: 34em; }
+.split__note code { background: rgba(20, 22, 26, .05); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+.code {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden;
+  transition: transform 180ms var(--ease), border-color 180ms var(--ease), box-shadow 180ms var(--ease);
+}
+@media (hover: hover) and (pointer: fine) {
+  .code:hover { transform: translateY(-2px); border-color: rgba(20, 22, 26, .22); box-shadow: 0 10px 26px -20px rgba(20, 22, 26, .38); }
+}
+.code:hover .code__head { color: var(--ink-2); }
+.code__head {
+  display: flex; justify-content: space-between; gap: 12px; padding: 8px 16px;
+  border-bottom: 1px solid var(--line-soft); font-size: 12px; color: var(--muted); background: #fbfbfa;
+  font-family: "SFMono-Regular", "Cascadia Mono", Consolas, monospace;
+}
+.code pre { margin: 0; padding: 14px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.72; color: var(--ink-2); }
+@media (max-width: 899px) { .split__text, .split__side { grid-column: 1 / -1; } }
+
+/* ---------- 常见问题 ---------- */
+.qa { display: grid; grid-template-columns: 1fr 1fr; gap: 0 48px; }
+.qa details { border-top: 1px solid var(--line); padding: 14px 0 16px; }
+.qa summary {
+  cursor: pointer; list-style: none; font-size: 17px; font-weight: 500;
+  display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+}
+.qa summary::-webkit-details-marker { display: none; }
+.qa summary::after {
+  content: "+"; font-family: var(--font-display); font-size: 18px; color: var(--muted);
+  transition: transform 180ms var(--ease); flex: 0 0 auto;
+}
+.qa details[open] summary::after { transform: rotate(45deg); }
+.qa p { margin-top: 6px; font-size: 15px; line-height: 1.72; color: var(--ink-2); max-width: 30em; }
+@media (max-width: 899px) { .qa { grid-template-columns: 1fr; gap: 0; } }
+
+/* ---------- 收尾与页脚 ---------- */
+.closing { padding: var(--padt) 0 28px; }
+.close { display: grid; grid-template-columns: 1fr auto; gap: 20px 48px; align-items: end; padding-bottom: 48px; border-bottom: 1px solid var(--line); }
+.close h2 { max-width: 18em; }
+.close p { margin-top: 14px; font-size: var(--t-lead); color: var(--ink-2); max-width: 30em; }
+.close p code { background: rgba(20, 22, 26, .06); padding: 2px 7px; border-radius: 5px; font-size: 15px; }
+.foot { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-top: 18px; font-size: var(--t-small); color: var(--muted); }
+.foot__brand { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); }
+.foot__brand .mark { width: 18px; height: 18px; }
+@media (max-width: 899px) {
+  .close { grid-template-columns: 1fr; align-items: start; padding-bottom: 32px; }
+  .close .btn--xl { width: 100%; }
+}
+
+/* ---------- 首屏入场 ---------- */
+html.m-enter .hero__text > .pill,
+html.m-enter .hero__text > h1,
+html.m-enter .hero__text > .hero__lead,
+html.m-enter .hero__text > .btn-row { opacity: 0; animation: rise 520ms var(--ease-enter) forwards; }
+html.m-enter .hero__text > h1 { animation-name: rise-mask; animation-duration: 760ms; }
+html.m-enter .hero__text > .pill { animation-delay: 40ms; }
+html.m-enter .hero__text > h1 { animation-delay: 100ms; }
+html.m-enter .hero__text > .hero__lead { animation-delay: 420ms; }
+html.m-enter .hero__text > .btn-row { animation-delay: 500ms; }
+html.m-enter .hero__art { opacity: 0; animation: rise-art 900ms var(--ease-enter) 220ms forwards; }
+
+@keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes rise-mask {
+  from { opacity: 0; transform: translateY(22px); clip-path: inset(0 0 100% 0); }
+  to { opacity: 1; transform: none; clip-path: inset(-20% -20% -20% -20%); }
+}
+@keyframes rise-art { from { opacity: 0; transform: scale(.985) translateY(10px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  html.m-enter .hero__text > *, html.m-enter .hero__art {
+    opacity: 1 !important; animation: none !important; transform: none !important; clip-path: none !important;
+  }
+  * { transition-duration: 1ms !important; }
+}
+@media print { .nav { display: none; } .hero, .sec, .closing { min-height: 0; padding: 24px 0; } }
+
+</style>
+</head>
+<body>
+<a class="skip-link" href="#top">跳到主要内容</a>
+
+<header class="nav">
+  <div class="wrap nav__in">
+    <a class="brand" href="#top">
+      <span class="mark" aria-hidden="true"><i></i></span>
+      <span class="brand__name">求真眼</span>
+    </a>
+    <nav class="nav__links" aria-label="页内导航">
+      <a href="#check">检测台</a>
+      <a href="#rule">怎么判</a>
+      <a href="#api">接口</a>
+      <a href="#qa">问题</a>
+    </nav>
+    <a class="btn btn--primary nav__cta" href="#check">快速检测</a>
+  </div>
+  <div class="nav__progress" aria-hidden="true"><i id="prog"></i></div>
+</header>
+
+<main id="top">
+
+  <!-- 一：首屏 -->
+  <section class="hero" data-enter>
+    <div class="wrap hero__grid">
+      <div class="hero__text">
+        <div class="hero__main">
+          <p class="pill"><span class="dot" aria-hidden="true"></span>规则库 · <span data-rules>3291</span> 条规则 · <span id="ruleUpdated">本地运行</span></p>
+          <h1>把 AI 的每句回答<span class="br"><br></span>核到规则上</h1>
+          <p class="hero__lead">求真眼对 AI 生成的回答做本地事实核查：命中规则库时给出可信或不可信，未覆盖时标明存疑，并附上规则编号与判断依据。规则文件是本地的 JSON，装完不用联网。</p>
+          <div class="btn-row">
+            <a class="btn btn--primary" href="#check">快速检测</a>
+            <a class="btn btn--secondary" href="#api">看接入接口</a>
+          </div>
+        </div>
+        <dl class="hero__facts">
+          <div><dt class="f__k">规则库</dt><dd class="f__v"><span data-rules>3291</span> 条</dd></div>
+          <div><dt class="f__k">可信度标签</dt><dd class="f__v">3 级</dd></div>
+          <div><dt class="f__k">规则类别</dt><dd class="f__v"><span id="catCount">2</span> 类</dd></div>
+        </dl>
+      </div>
+
+      <div class="hero__bench" id="check">
+        <div class="app">
+          <div class="app__main">
+            <div class="app__head">
+              <div class="tabs" role="tablist" aria-label="检测模式">
+                <button class="tab" id="tabSingle" role="tab" aria-selected="true" aria-controls="paneSingle" data-pane="single">单条检测</button>
+                <button class="tab" id="tabBatch" role="tab" aria-selected="false" aria-controls="paneBatch" data-pane="batch">批量检测</button>
+                <span class="tab__ind" aria-hidden="true"></span>
+                <p class="app__status"><span class="dot" aria-hidden="true"></span><span id="statRules">3291</span> 条规则 · <span id="svcState">读取中</span></p>
+              </div>
+            </div>
+
+            <div class="offline" id="offline" role="status" hidden>未连接到检测服务。先在项目目录运行 <code>python app.py</code>，再刷新本页。</div>
+
+            <div class="pane" id="paneSingle" role="tabpanel" aria-labelledby="tabSingle">
+              <form id="formSingle" class="form" autocomplete="off">
+                <div class="form__row">
+                  <div class="field field--q">
+                    <label for="q">用户提问</label>
+                    <input id="q" name="q" placeholder="例如：SOS 最初代表什么">
+                  </div>
+                  <div class="field field--act">
+                    <button class="btn btn--primary" type="submit">检测这条回答</button>
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="a">AI 生成的回答</label>
+                  <textarea id="a" name="a" rows="2" placeholder="例如：SOS 最初并没有代表任何事物"></textarea>
+                </div>
+                <div class="form__foot">
+                  <div class="chips">
+                    <span class="chips__h">填入示例</span>
+                    <button type="button" class="chip" data-q="SOS 最初代表什么" data-a="SOS 最初并没有代表任何事物">可信</button>
+                    <button type="button" class="chip" data-q="如果你吃西瓜籽会发生什么" data-a="吃了西瓜籽会从肚子里长出一棵西瓜树">不可信</button>
+                    <button type="button" class="chip" data-q="太阳从哪边升起？" data-a="太阳从西边升起哦">未覆盖</button>
+                    <button type="button" class="chip" data-q="喝咖啡会影响你的生长吗" data-a="不会，咖啡因不影响身高">同义改写</button>
+                  </div>
+                </div>
+              </form>
+              <div class="verdict" id="singleResult" aria-live="polite"></div>
+            </div>
+
+            <div class="pane" id="paneBatch" role="tabpanel" aria-labelledby="tabBatch" hidden>
+              <form id="formBatch" class="form" autocomplete="off">
+                <div class="field">
+                  <label for="batchInput">每行一条，问题和回答之间用三个竖线分隔</label>
+                  <textarea id="batchInput" rows="4" placeholder="SOS 最初代表什么|||SOS 最初并没有代表任何事物
+如果你吃西瓜籽会发生什么|||吃了西瓜籽会从肚子里长出一棵西瓜树
+太阳从哪边升起？|||太阳从西边升起哦"></textarea>
+                </div>
+                <div class="form__foot">
+                  <p class="form__hint">单次最多 500 条，服务端逐条匹配规则。</p>
+                  <button class="btn btn--primary" type="submit">批量检测</button>
+                </div>
+              </form>
+              <div class="stats" id="batchStats"></div>
+              <div class="batch" id="batchResults"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero__art" data-enter-media aria-hidden="true">
+        <div class="panel">
+          <div class="panel__bar">
+            <span class="panel__dots"><i></i><i></i><i></i></span>
+            <span class="panel__path">127.0.0.1:8080/check</span>
+            <span class="panel__chip">POST</span>
+          </div>
+          <div class="panel__body">
+            <div class="panel__row"><span class="panel__k">question</span><span class="panel__q">喝咖啡会影响你的生长吗</span></div>
+            <div class="panel__row"><span class="panel__k">answer</span><span class="panel__q">不会，咖啡因不影响身高</span></div>
+            <div class="panel__verdict is-ok">
+              <span class="verdict__tag">可信</span>
+              <span class="verdict__meta">命中规则 #751 · 回答含正确答案指示词</span>
+            </div>
+            <div class="panel__verdict is-bad">
+              <span class="verdict__tag">不可信</span>
+              <span class="verdict__meta">同一规则 · 回答换一种说法就判为不可信</span>
+            </div>
+            <div class="panel__foot">
+              <span>rules.json</span><span data-rules>3291</span>
+              <span>耗时</span><span>4 ms</span>
+            </div>
+          </div>
+        </div>
+        <div class="panel-ledger">
+          <p class="ledger__t">本页会话</p>
+          <div class="ledger__grid">
+            <div><span id="lgTotal">0</span><em>已检</em></div>
+            <div><span id="lgOk">0</span><em>可信</em></div>
+            <div><span id="lgBad">0</span><em>不可信</em></div>
+            <div><span id="lgDoubt">0</span><em>存疑</em></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 二：检测台 -->
+  <!-- 三：怎么判 -->
+  <section class="sec sec--alt" id="rule">
+    <div class="wrap sec__fill">
+      <div class="sec__head">
+        <h2>怎么判<span class="muted">三步，纯规则匹配，每一步都能解释。</span></h2>
+      </div>
+
+      <div class="chain" aria-hidden="true"><span></span></div>
+      <ol class="steps">
+        <li class="step">
+          <span class="step__n">01</span>
+          <h3>归一化提问</h3>
+          <p>全角转半角、统一小写、去掉标点与空白，再把“东边”“东方”这类说法扩展成标准词，避免同义不同词漏匹配。</p>
+        </li>
+        <li class="step">
+          <span class="step__n">02</span>
+          <h3>挑最特异的一条规则</h3>
+          <p>所有关键词全部命中的规则进入候选，按关键词数量与强限定词加权打分，取分最高的一条，而不是第一个命中的。</p>
+        </li>
+        <li class="step">
+          <span class="step__n">03</span>
+          <h3>核对回答里的指示词</h3>
+          <p>回答中出现该规则的任一正确指示词即为可信，否则判为不可信；规则库没覆盖的问题一律标存疑，转人工核实。</p>
+        </li>
+      </ol>
+
+      <div class="legend">
+        <div class="lg is-ok"><span class="lg__tag">可信</span><p>回答命中了规则的正确答案指示词，附规则编号。</p></div>
+        <div class="lg is-bad"><span class="lg__tag">不可信</span><p>问题命中规则，但回答里没有正确答案指示词。</p></div>
+        <div class="lg is-doubt"><span class="lg__tag">存疑</span><p>规则库暂未覆盖该问题，建议人工核实。</p></div>
+      </div>
+
+      <div class="example">
+        <p class="example__label">一次完整的判定</p>
+        <div class="example__row"><span class="example__k">提问</span><span>如果你吃西瓜籽会发生什么</span></div>
+        <div class="example__row"><span class="example__k">回答</span><span>吃了西瓜籽会从肚子里长出一棵西瓜树</span></div>
+        <div class="example__row"><span class="example__k">命中</span><span>规则 #1 · 关键词「如果你吃西瓜籽会发生什么」</span></div>
+        <div class="example__verdict"><span class="verdict__tag">不可信</span><span class="verdict__meta">回答里没有出现「什么都不会发生」这条正确指示词</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 四：接口 -->
+  <section class="sec" id="api">
+    <div class="wrap sec__fill">
+      <div class="sec__head">
+        <h2>接入接口<span class="muted">一个 POST 请求，两个字段，返回可直接展示的结论。</span></h2>
+      </div>
+
+      <div class="split">
+        <div class="split__text">
+          <div class="code">
+            <div class="code__head"><span>POST /check</span><span>Content-Type: application/json</span></div>
+<pre><code>{
+  "question": "如果你吃西瓜籽会发生什么？",
+  "answer": "吃了西瓜籽会从肚子里长出一棵西瓜树"
+}</code></pre>
+          </div>
+          <p class="split__note">返回里的 <code>level</code> 与 <code>message</code> 可以直接展示在回答旁侧；<code>rule_id</code>、<code>category</code> 用来解释依据。批量抽检走 <code>/check_batch</code>，一次最多 500 条。</p>
+        </div>
+        <div class="split__side">
+          <div class="code">
+            <div class="code__head"><span>200 OK</span><span>application/json</span></div>
+<pre><code>{
+  "score": 1.0,
+  "level": "不可信",
+  "matched": true,
+  "rule_id": 1,
+  "category": "常识",
+  "message": "如果你吃西瓜籽会发生什么？"
+}</code></pre>
+          </div>
+          <p class="split__note">命中的规则带编号与类别，便于在上层页面里把“为什么这样判”展示出来。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 五：常见问题 -->
+  <section class="sec sec--alt" id="qa">
+    <div class="wrap sec__fill">
+      <div class="sec__head">
+        <h2>常见问题<span class="muted">规则库、部署与调用上的几件事。</span></h2>
+      </div>
+      <div class="qa">
+        <details open>
+          <summary>规则库现在覆盖什么？</summary>
+          <p><span data-rules>3291</span> 条规则，分 <span id="catList">自动导入、常识</span> <span id="catCount2">2</span> 类，来自 TruthfulQA 中文版与 FactualBench 的子集，内容包括常识与常见误解。规则存在 rules.json 里，改完会自动重载，也可以用随附的脚本扩充。</p>
+        </details>
+        <details>
+          <summary>为什么有的问题判成存疑？</summary>
+          <p>规则库没有覆盖这条提问，或者关键词没有全部命中。存疑不是对回答的否定，只表示自动检测给不出结论，需要人工核实。</p>
+        </details>
+        <details>
+          <summary>需要联网或调用其他模型吗？</summary>
+          <p>不需要。规则匹配在本地完成，一次检测是毫秒级；部署到云服务器或 PythonAnywhere 之后，外部平台按 REST 接口调用即可。</p>
+        </details>
+        <details>
+          <summary>怎么往规则库里加新问答？</summary>
+          <p>把 CSV 或 TXT 放进 new_data 目录，运行 python auto_rule_generator.py（或开着 watcher.py），脚本会切词、标注强限定词与同义词，再合并进 rules.json。</p>
+        </details>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="closing" id="contact">
+  <div class="wrap">
+    <div class="close">
+      <div>
+        <h2>先在本地跑一条。</h2>
+        <p>在项目目录执行 <code>python app.py</code>，打开 127.0.0.1:8080 就能用，规则库随代码一起走。</p>
+      </div>
+      <a class="btn btn--primary btn--xl" href="#check">检测一条回答</a>
+    </div>
+    <div class="foot">
+      <span class="foot__brand"><span class="mark" aria-hidden="true"><i></i></span>求真眼 v1.1</span>
+      <span class="foot__legal">Python + Flask + 规则引擎 · MIT 开源 · 2026</span>
+    </div>
+  </div>
+</footer>
+
+<script data-build="v3">
+/* 求真眼 · 检测台交互
+   后端契约（app.py）：
+     POST /check       {question, answer}            → {level, matched, rule_id, category, message, score}
+     POST /check_batch {items:[{question, answer}]} → {total, ok, bad, doubt, results}
+     GET  /stats                                     → {total_rules, by_category} */
+
+(function () {
+  'use strict';
+
+  var session = { total: 0, ok: 0, bad: 0, doubt: 0 };
+  function $(id) { return document.getElementById(id); }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function kindOf(level) {
+    level = level || '';
+    if (level.indexOf('不可信') !== -1) return 'bad';
+    if (level.indexOf('可信') !== -1) return 'ok';
+    return 'doubt';
+  }
+  function labelOf(kind) {
+    return kind === 'ok' ? '可信' : kind === 'bad' ? '不可信' : '存疑';
+  }
+
+  function bump(kind) {
+    session.total++;
+    session[kind]++;
+    $('lgTotal').textContent = session.total;
+    $('lgOk').textContent = session.ok;
+    $('lgBad').textContent = session.bad;
+    $('lgDoubt').textContent = session.doubt;
+  }
+
+  function api(path, body) {
+    var opts = { method: body ? 'POST' : 'GET', headers: {} };
+    if (body) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(body);
+    }
+    return fetch(path, opts).then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    });
+  }
+
+  var offlineBase = '';
+  function showOffline(msg) {
+    var el = $('offline');
+    if (!offlineBase) offlineBase = el.innerHTML;
+    el.innerHTML = offlineBase + (msg ? ' ' + escapeHtml(msg) : '');
+    el.hidden = false;
+  }
+
+  /* ---------- 标签页 ---------- */
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'));
+  var ind = document.querySelector('.tab__ind');
+
+  function currentTab() {
+    return tabs.filter(function (t) { return t.getAttribute('aria-selected') === 'true'; })[0];
+  }
+  function moveIndicator(btn, animate) {
+    if (!ind || !btn) return;
+    if (!animate) ind.style.transition = 'none';
+    ind.style.width = btn.offsetWidth + 'px';
+    ind.style.transform = 'translateX(' + btn.offsetLeft + 'px)';
+    if (!animate) { void ind.offsetWidth; ind.style.transition = ''; }
+  }
+  function selectTab(name) {
+    tabs.forEach(function (t) {
+      var on = t.getAttribute('data-pane') === name;
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      var key = t.getAttribute('data-pane');
+      var pane = $('pane' + key.charAt(0).toUpperCase() + key.slice(1));
+      if (pane) pane.hidden = !on;
+      if (on) moveIndicator(t, true);
+    });
+  }
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () { selectTab(t.getAttribute('data-pane')); });
+  });
+  window.addEventListener('resize', function () { moveIndicator(currentTab(), false); });
+
+  /* ---------- 示例 ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('.chip[data-q]'), function (chip) {
+    chip.addEventListener('click', function () {
+      $('q').value = chip.getAttribute('data-q');
+      $('a').value = chip.getAttribute('data-a');
+      $('singleResult').innerHTML = '';
+      $('a').focus();
+    });
+  });
+
+  /* ---------- 单条 ---------- */
+  function verdictHtml(r) {
+    var kind = kindOf(r.level);
+    var why = r.matched && r.rule_id
+      ? '命中规则 #' + r.rule_id + (r.category ? ' · ' + r.category : '')
+      : (r.matched ? '已命中规则' : '规则库未覆盖');
+    return '<div class="v-card ' + kind + '">' +
+      '<div class="v-card__top"><span class="v-card__level">' + labelOf(kind) + '</span>' +
+      '<span class="v-card__why">' + escapeHtml(why) + '</span></div>' +
+      (r.message ? '<p class="v-card__msg">' + escapeHtml(r.message) + '</p>' : '') +
+      '</div>';
+  }
+
+  $('formSingle').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var box = $('singleResult');
+    var q = $('q').value.trim(), a = $('a').value.trim();
+    if (!q || !a) {
+      box.innerHTML = '<div class="v-card doubt"><div class="v-card__top"><span class="v-card__level">待补全</span>' +
+        '<span class="v-card__why">问题和回答都填上再检测</span></div></div>';
+      return;
+    }
+    box.innerHTML = '<div class="v-card"><div class="v-card__top"><span class="v-card__why">正在匹配规则…</span></div></div>';
+    api('/check', { question: q, answer: a }).then(function (r) {
+      box.innerHTML = verdictHtml(r);
+      bump(kindOf(r.level));
+    }).catch(function (err) {
+      box.innerHTML = '';
+      showOffline(err && err.message ? '（' + err.message + '）' : '');
+    });
+  });
+
+  /* ---------- 批量 ---------- */
+  $('formBatch').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var rows = $('batchResults'), stats = $('batchStats');
+    var lines = $('batchInput').value.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+    if (!lines.length) {
+      rows.innerHTML = '<div class="batch__row doubt"><span class="b-q">没有可检测的行</span><span class="b-l">待补全</span></div>';
+      return;
+    }
+    var items = [], skipped = [];
+    lines.forEach(function (line, i) {
+      var idx = line.indexOf('|||');
+      if (idx === -1) { skipped.push(i); return; }
+      var q = line.slice(0, idx).trim(), a = line.slice(idx + 3).trim();
+      if (!q || !a) { skipped.push(i); return; }
+      items.push({ question: q, answer: a });
+    });
+    if (!items.length) {
+      rows.innerHTML = '<div class="batch__row doubt"><span class="b-q">每行都要用 ||| 分开问题和回答</span><span class="b-l">格式有误</span></div>';
+      return;
+    }
+    rows.innerHTML = '<div class="batch__row"><span class="b-q">正在逐条匹配…</span><span class="b-l"></span></div>';
+
+    api('/check_batch', { items: items }).then(function (res) {
+      var html = res.results.map(function (r, i) {
+        var kind = kindOf(r.level);
+        return '<div class="batch__row ' + kind + '"><span class="b-q">' + escapeHtml(items[i].question) +
+          '</span><span class="b-l">' + labelOf(kind) + '</span>' +
+          (r.rule_id ? '<span class="b-why">规则 #' + r.rule_id + ' · ' + escapeHtml(r.message || '') + '</span>' : '') +
+          '</div>';
+      }).join('');
+      skipped.forEach(function (i) {
+        html += '<div class="batch__row doubt"><span class="b-q">第 ' + (i + 1) + ' 行格式有误：' + escapeHtml(lines[i]) +
+          '</span><span class="b-l">跳过</span></div>';
+      });
+      rows.innerHTML = html;
+
+      var doubt = res.doubt || 0;
+      stats.innerHTML =
+        '<div class="stat"><b>' + (res.total + skipped.length) + '</b><span>提交条数</span></div>' +
+        '<div class="stat"><b>' + res.ok + '</b><span>可信</span></div>' +
+        '<div class="stat"><b>' + res.bad + '</b><span>不可信</span></div>' +
+        '<div class="stat"><b>' + doubt + '</b><span>存疑</span></div>';
+
+      var k;
+      for (k = 0; k < res.ok; k++) bump('ok');
+      for (k = 0; k < res.bad; k++) bump('bad');
+      for (k = 0; k < doubt; k++) bump('doubt');
+    }).catch(function (err) {
+      rows.innerHTML = '';
+      stats.innerHTML = '';
+      showOffline(err && err.message ? '（' + err.message + '）' : '');
+    });
+  });
+
+  /* ---------- 初始化 ---------- */
+  function fmtTime(sec) {
+    if (!sec) return '';
+    var d = new Date(sec * 1000);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  // 把 /stats 的结果写到页面上：规则总数、类别分布、最后更新时间
+  function paintStats(s) {
+    if (typeof s.total_rules !== 'number') return;
+    $('statRules').textContent = s.total_rules;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-rules]'), function (el) {
+      el.textContent = s.total_rules;
+    });
+
+    var cats = s.by_category || {};
+    var keys = Object.keys(cats).sort(function (a, b) { return cats[b] - cats[a]; });
+    if (keys.length) {
+      if ($('catCount')) $('catCount').textContent = keys.length;
+      if ($('catCount2')) $('catCount2').textContent = keys.length;
+      if ($('catList')) $('catList').textContent = keys.join('、');
+    }
+
+    var t = fmtTime(s.updated_at);
+    if ($('ruleUpdated')) $('ruleUpdated').textContent = t ? '更新于 ' + t : '本地运行';
+    if ($('svcState')) $('svcState').textContent = t ? '规则更新于 ' + t : '本地服务';
+  }
+
+  function init() {
+    refreshStats();
+    // 切回这个标签页时再对一次，规则库刚更新也能马上看到
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) refreshStats();
+    });
+
+    moveIndicator(currentTab(), false);
+
+    var prog = $('prog');
+    function onScroll() {
+      var h = document.documentElement.scrollHeight - window.innerHeight;
+      prog.style.width = (h > 0 ? Math.min(100, window.scrollY / h * 100) : 0) + '%';
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+  }
+
+  // 拉一次统计；服务没起来时提示离线
+  function refreshStats() {
+    api('/stats').then(function (s) {
+      paintStats(s);
+    }).catch(function () { showOffline(); });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+
+</script>
+</body>
+</html>

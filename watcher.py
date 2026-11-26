@@ -1,29 +1,40 @@
-import os
+import sys
 import time
 import subprocess
 from pathlib import Path
 
 DATA_FOLDER = "new_data"
 PROCESSED_FOLDER = "processed"
-CHECK_INTERVAL = 10  # 每10秒检查一次
+CHECK_INTERVAL = 10
 
 def run_generator():
-    """运行规则生成器"""
     try:
         result = subprocess.run(
-            ["python", "auto_rule_generator.py"],
+            [sys.executable, "auto_rule_generator.py"],
             capture_output=True,
             text=True,
-            encoding='utf-8'
+            encoding="utf-8",
+            errors="ignore"
         )
         print(result.stdout)
         if result.stderr:
-            print("错误:", result.stderr)
+            print("STDERR:", result.stderr)
     except Exception as e:
-        print(f"运行出错: {e}")
+        print(f"RUN ERROR: {e}")
+
+RELOAD_FLAG = Path(__file__).with_name(".rules_updated")
+
+
+def notify_server():
+    """生成完规则后发一个信号，让 app.py 那边立刻重载 rules.json。
+    有没有这个文件都不影响功能：app.py 每次请求也会比对文件修改时间。"""
+    try:
+        RELOAD_FLAG.write_text(str(time.time()), encoding="utf-8")
+    except Exception as e:
+        print(f"NOTIFY ERROR: {e}")
+
 
 def get_file_list(folder):
-    """获取文件夹里的文件列表"""
     path = Path(folder)
     if not path.exists():
         return set()
@@ -31,36 +42,26 @@ def get_file_list(folder):
 
 def main():
     print("=" * 50)
-    print("📁 求真眼 - 文件监控器")
-    print(f"📂 监控文件夹: {DATA_FOLDER}/")
-    print(f"⏱️  检查间隔: {CHECK_INTERVAL} 秒")
-    print("=" * 50)
-    print("📌 将 CSV 或 TXT 文件放入 new_data/ 文件夹")
-    print("📌 系统会自动处理并生成规则")
-    print("📌 按 Ctrl+C 停止监控")
+    print("Qiuzhenyan Watcher STARTED")
+    print(f"Watching: {DATA_FOLDER}/  interval: {CHECK_INTERVAL}s")
+    print("Put CSV/TXT into new_data/ -> rules auto generated")
+    print("Press Ctrl+C to stop")
     print("=" * 50)
 
-    # 创建必要的文件夹
     Path(DATA_FOLDER).mkdir(exist_ok=True)
     Path(PROCESSED_FOLDER).mkdir(exist_ok=True)
-
-    # 记录当前文件列表
     current_files = get_file_list(DATA_FOLDER)
 
     try:
         while True:
             time.sleep(CHECK_INTERVAL)
             new_files = get_file_list(DATA_FOLDER)
-
-            # 检查是否有新文件
             added = new_files - current_files
             if added:
-                print(f"\n🔔 检测到新文件: {', '.join(added)}")
+                print(f"\nNEW FILE: {', '.join(added)}")
                 run_generator()
-                current_files = get_file_list(DATA_FOLDER)  # 更新列表
-
+                notify_server()
+                current_files = get_file_list(DATA_FOLDER)
     except KeyboardInterrupt:
-        print("\n\n👋 监控已停止")
-
-if __name__ == "__main__":
-    main()
+        print("\nWatcher stopped")
+main()
